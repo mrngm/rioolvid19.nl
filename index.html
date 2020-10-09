@@ -1,0 +1,182 @@
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf8" />
+<title>Rioolmetingen RIVM</title>
+<!-- bron datapunten: https://data.rivm.nl/covid-19/COVID-19_rioolwaterdata.json lokaal gecachet want liev -->
+<!-- bron kaart: CC-BY Veiligheidsberaad.nl / IFV.nl / PDOK.nl: <https://www.nationaalgeoregister.nl/geonetwork/srv/dut/catalog.search#/metadata/54d2021b-e778-4834-a3c6-75c89d36b942?tab=general> -->
+<!-- In een paar avondjes en middagen in elkaar geklust door twitter.com/mrngm, verwacht geen technische hoogstandjes -->
+<!-- Kwadratische decay met kleur/transparantie over 2 weken via Bas Westerbaan <https://bas.westerbaan.name/> -->
+<!-- TODO
+        - last modification van 't bronbestand
+        - opensaus repootje $ergens
+        - wel/niet Representative_measurement laten meetellen?
+        - min/max/avg laten meewegen?
+        - min/max per dag
+        - anti-flauwvalkleuren
+-->
+<style type="text/css">
+html, body {
+    padding: 0;
+    margin: 0;
+    width: 100%;
+    height: 100%;
+}
+canvas {
+    position: absolute;
+    margin: 0;
+    padding: 0;
+    width: 28px;
+    height: 32px;
+    border: 1px solid black;
+}
+#slider {
+        position: absolute;
+        left: 0px;
+        top: 0px;
+        padding: 2px;
+        z-index: 2;
+}
+#kaart { 
+        z-index: 1;
+}
+#points {
+        z-index: 2;
+}
+</style>
+
+<script type="text/javascript">
+var rioolData = {};
+var mapCtx;
+var ctx;
+
+var rioolRNAmin = 9999;
+var rioolRNAmax = 0;
+var rioolRNAavg = 0;
+
+function loadMap() {
+    var c = document.getElementById('kaart');
+    c.style.height = window.innerHeight - 10;
+    c.style.width = (window.innerHeight - 10) * 0.86;
+    mapCtx = c.getContext('2d');
+
+    var tiles = [];
+    var tilesIndex = 0;
+    for (var col = 5; col < 11; col++) {
+        for (var row = 4; row < 11; row++) {
+            tiles[tilesIndex] = new Image();
+            tiles[tilesIndex].onload = (function() {
+                var myCol = col;
+                var myRow = row;
+                    return function() {
+                        mapCtx.save();
+                        mapCtx.translate(0, -312);
+                        mapCtx.drawImage(this, (myCol-5)*512, (myRow-4)*512, 512, 512);
+                        mapCtx.restore();
+                    };
+                }());
+            tiles[tilesIndex].src = "https://geodata.nationaalgeoregister.nl/tiles/service/wmts?layer=opentopoachtergrondkaart&style=default&tilematrixset=EPSG%3A28992&Service=WMTS&Request=GetTile&Version=1.0.0&Format=image%2Fpng&TileMatrix=EPSG%3A28992%3A4&TileCol="+col+"&TileRow="+row;
+            tilesIndex++;
+        }
+    }
+}
+
+
+function fetchRioolData() {
+    var c = document.getElementById('points');
+    c.style.height = window.innerHeight - 10;
+    c.style.width = (window.innerHeight - 10) * 0.86;
+    ctx = c.getContext('2d');
+    loadMap();
+
+    fetch("rwd.json")
+        .then(function (res) {
+            return res.json();
+        })
+        .then(function (data) {
+            for (var i = 0; i < data.length; i++) {
+                var rna_per_ml = data[i].RNA_per_ml
+                if (rioolRNAmin > rna_per_ml) {
+                        rioolRNAmin = rna_per_ml;
+                }
+                if (rioolRNAmax < rna_per_ml) {
+                        rioolRNAmax = rna_per_ml;
+                }
+                dt = data[i].Date_measurement
+                if (!(dt in rioolData)) {
+                    rioolData[dt] = [];
+                }
+                rioolData[dt].push(data[i]);
+                rioolRNAavg += rna_per_ml;
+            }
+            var rdKeys = Object.keys(rioolData);
+            rdKeys.sort(function(a, b) {
+                return new Date(a) - new Date(b);
+            });
+            var rdLength = rdKeys.length;
+            rioolRNAavg /= data.length;
+
+            var slider = document.getElementById('datumRange');
+            var sliderText = document.getElementById('datumRangeText');
+            slider.max = rdLength-1;
+            slider.style.width = c.style.width;
+            sliderText.innerHTML = rdKeys[slider.value];                
+            drawRioolData(rdKeys[slider.value], true, 1.0);
+
+            slider.oninput = function() {
+                var first = true;
+                for (var i = 0; i <= 14; i++) {
+                    var v = this.value - 14 + i;
+                    if (v < 0) continue;
+                    drawRioolData(rdKeys[v], first, i / 14);
+                    first = false;
+                }
+                var dt = rdKeys[this.value];
+                sliderText.innerHTML = dt;                
+            }
+        }).catch(function (err) {
+            console.log(err);
+        });
+}
+
+function drawRioolData(datum, clear, v) {
+    ctx.save();
+    if (clear) {
+        ctx.clearRect(0, 0, 2800, 3250);
+    }
+    ctx.font = '48px sans';
+    ctx.fillStyle = "rgba(0,0,0,"+(v*v)+")";
+    if (v == 1.0) {
+        ctx.fillStyle = "rgba(255,0,0,"+v+")";
+    }
+
+
+    ctx.translate(25, 3325);
+    ctx.scale(0.9999079, 0.9999079);
+
+    var datumData = rioolData[datum];
+    for (var i = 0; i < datumData.length; i++) {
+	ctx.beginPath();
+        x = Math.floor(datumData[i].X_coordinate / 100.0);
+        y = -(Math.floor(datumData[i].Y_coordinate / 100.0)-3050);
+        radius = Math.floor(Math.log(datumData[i].RNA_per_ml)*4);
+        ctx.arc(x, y, radius, 0, 2*Math.PI);
+        ctx.fill();
+        //ctx.fillText(datumData[i].RWZI_AWZI_name, x+radius, y);
+	ctx.closePath();
+    }
+    ctx.restore();
+}
+</script>
+
+</head>
+<body onload="javascript:fetchRioolData()">
+<canvas width="2800" height="3250" id="kaart"></canvas>
+<canvas width="2800" height="3250" id="points"></canvas>
+
+<div id="slider">
+    <input type="range" min="0" max="100" value="0" class="slider" id="datumRange">
+    <p id="datumRangeText"></p>
+</div>
+
+</body>
+</html>
